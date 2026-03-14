@@ -15,7 +15,7 @@ export const snowstormCatalog: ApiCatalog = {
 	baseUrl: "https://browser.ihtsdotools.org/snowstorm/snomed-ct",
 	version: "9.0",
 	auth: "none",
-	endpointCount: 18,
+	endpointCount: 17,
 	notes:
 		"- Branch: all queries are against /MAIN (SNOMED CT International Edition)\n" +
 		"- Concept IDs are SNOMED CT identifiers (numeric strings), e.g. 73211009 = Diabetes mellitus, 404684003 = Clinical finding\n" +
@@ -30,6 +30,8 @@ export const snowstormCatalog: ApiCatalog = {
 		"- Semantic tags in FSN indicate concept type: (disorder), (finding), (procedure), (substance), (body structure), (observable entity), (morphologic abnormality), (organism), (product), (qualifier value), (situation), (event), (physical object), (specimen), (environment), (cell structure), (cell), (link assertion), (regime/therapy)\n" +
 		"- Relationships use SNOMED CT type IDs, e.g. 116680003 = 'Is a' (parent), 363698007 = 'Finding site', 116676008 = 'Associated morphology'\n" +
 		"- ICD-10 cross-mappings: query refset members with refsetId=447562003 (ICD-10 complex map) or refsetId=816186008 (ICD-10-CM simple map)\n" +
+		"- IMPORTANT: To search descriptions by text, use /browser/MAIN/descriptions?term=... (NOT /MAIN/descriptions which only supports lookup by ID)\n" +
+		"- To search concepts by text, use /MAIN/concepts?term=... which supports text search directly\n" +
 		"- Pagination: most list endpoints return { items, total, limit, offset }. Use offset + limit params (default limit=50, max 10000)\n" +
 		"- The /browser/ prefix endpoints return enriched concept data with pt (preferred term), fsn (fully specified name), and descriptions pre-populated\n" +
 		"- Accept: application/json header is required on all requests\n" +
@@ -139,51 +141,26 @@ export const snowstormCatalog: ApiCatalog = {
 			method: "GET",
 			path: "/MAIN/descriptions",
 			summary:
-				"Search descriptions (terms) across all concepts. Returns descriptions with conceptId, term, type, and language.",
+				"Look up descriptions by specific IDs or by concept ID. Does NOT support text search — use /browser/MAIN/descriptions for text search instead.",
 			category: "description",
 			queryParams: [
 				{
-					name: "term",
+					name: "descriptionIds",
 					type: "string",
 					required: false,
-					description: "Search term to match against description text",
+					description: "Comma-separated description SCTIDs to retrieve specific descriptions",
 				},
 				{
-					name: "active",
-					type: "boolean",
-					required: false,
-					description: "Filter by active status",
-				},
-				{
-					name: "conceptActive",
-					type: "boolean",
-					required: false,
-					description: "Filter by whether the parent concept is active",
-				},
-				{
-					name: "module",
+					name: "conceptId",
 					type: "string",
 					required: false,
-					description: "Filter by module SCTID",
+					description: "Retrieve all descriptions for a single concept ID",
 				},
 				{
-					name: "language",
+					name: "conceptIds",
 					type: "string",
 					required: false,
-					description: "Filter by language code (e.g. 'en')",
-				},
-				{
-					name: "type",
-					type: "string",
-					required: false,
-					description: "Filter by description type SCTID: 900000000000003001=FSN, 900000000000013009=Synonym",
-				},
-				{
-					name: "semanticTag",
-					type: "string",
-					required: false,
-					description:
-						"Filter by semantic tag (e.g. 'disorder', 'finding', 'procedure')",
+					description: "Comma-separated concept IDs to retrieve descriptions for multiple concepts",
 				},
 				{
 					name: "offset",
@@ -203,14 +180,14 @@ export const snowstormCatalog: ApiCatalog = {
 			method: "GET",
 			path: "/browser/MAIN/descriptions",
 			summary:
-				"Search descriptions in browser format. Returns descriptions with concept details (FSN, PT) included.",
+				"Text search descriptions by term. This is the primary endpoint for searching SNOMED descriptions by text. Returns descriptions with concept details (FSN, PT) included. Use this instead of /MAIN/descriptions when searching by text.",
 			category: "description",
 			queryParams: [
 				{
 					name: "term",
 					type: "string",
 					required: true,
-					description: "Search term",
+					description: "Search term (e.g. 'atrial fibrillation', 'diabetes mellitus'). Uses case-insensitive multi-prefix matching.",
 				},
 				{
 					name: "active",
@@ -225,16 +202,29 @@ export const snowstormCatalog: ApiCatalog = {
 					description: "Filter by concept active status",
 				},
 				{
-					name: "semanticTag",
+					name: "semanticTags",
 					type: "string",
 					required: false,
-					description: "Filter by semantic tag (e.g. 'disorder')",
+					description: "Filter by semantic tag(s) (e.g. 'disorder', 'finding', 'procedure')",
 				},
 				{
 					name: "language",
 					type: "string",
 					required: false,
 					description: "Language code (e.g. 'en')",
+				},
+				{
+					name: "groupByConcept",
+					type: "boolean",
+					required: false,
+					description: "Group results by concept, returning one description per concept (default: false)",
+				},
+				{
+					name: "searchMode",
+					type: "string",
+					required: false,
+					description: "Search mode",
+					enum: ["STANDARD", "REGEX", "WHOLE_WORD"],
 				},
 				{
 					name: "offset",
@@ -399,31 +389,6 @@ export const snowstormCatalog: ApiCatalog = {
 		},
 
 		// === Relationship ===
-		{
-			method: "GET",
-			path: "/browser/MAIN/concepts/{conceptId}/parents",
-			summary:
-				"Get inferred/stated parents for a concept (browser format with enriched details)",
-			category: "relationship",
-			pathParams: [
-				{
-					name: "conceptId",
-					type: "string",
-					required: true,
-					description: "Concept ID",
-				},
-			],
-			queryParams: [
-				{
-					name: "form",
-					type: "string",
-					required: false,
-					description: "Relationship form",
-					enum: ["stated", "inferred"],
-					default: "inferred",
-				},
-			],
-		},
 		{
 			method: "GET",
 			path: "/MAIN/relationships",
