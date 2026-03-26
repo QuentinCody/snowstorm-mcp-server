@@ -6,7 +6,7 @@ interface QueryEnv {
     SNOWSTORM_DATA_DO?: unknown;
 }
 
-export function registerQueryData(server: McpServer, env?: QueryEnv) {
+export function registerQueryData(server: McpServer, env?: QueryEnv): void {
     const handler = createQueryDataHandler("SNOWSTORM_DATA_DO", "snowstorm");
 
     server.registerTool(
