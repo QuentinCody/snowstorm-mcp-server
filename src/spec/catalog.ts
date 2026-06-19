@@ -34,8 +34,8 @@ export const snowstormCatalog: ApiCatalog = {
 		"- To search concepts by text, use /MAIN/concepts?term=... which supports text search directly\n" +
 		"- Pagination: most list endpoints return { items, total, limit, offset }. Use offset + limit params (default limit=50, max 10000)\n" +
 		"- The /browser/ prefix endpoints return enriched concept data with pt (preferred term), fsn (fully specified name), and descriptions pre-populated\n" +
-		"- Accept: application/json header is required on all requests\n" +
-		"- Rate limits: the public browser endpoint has moderate rate limits; add delays for bulk queries",
+		"- Accept: application/json header is required on all requests (NO Content-Type on GET)\n" +
+		"- ⚠ ACCESS BLOCKED (2026-06): IHTSDO public endpoints return an HTML 'SNOMED International Access Denied' 405 for EVERY request from our egress IP (even nonexistent paths — edge-gateway block under the SNOMED CT Browser License / Acceptable-Usage Policy). No public unauthenticated base works; needs a self-hosted or licensed/whitelisted endpoint via the SNOWSTORM_BASE override in src/lib/http.ts",
 	endpoints: [
 		// === Concept ===
 		{

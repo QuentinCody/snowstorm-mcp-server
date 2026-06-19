@@ -35,6 +35,8 @@ export function registerCodeMode(
 	// Register the execute tool (V8 isolate via DynamicWorkerExecutor)
 	const executeTool = createExecuteTool({
 		prefix: "snowstorm",
+		// Verifiable provenance: snowstorm_execute results carry a _meta.citation.
+		source: { id: "snowstorm", name: "SNOMED CT", url: "https://www.snomed.org" },
 		catalog: snowstormCatalog,
 		apiFetch,
 		doNamespace: env.SNOWSTORM_DATA_DO,

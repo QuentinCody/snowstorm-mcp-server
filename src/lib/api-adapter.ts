@@ -15,7 +15,7 @@ export function createSnowstormApiFetch(): ApiFetchFn {
 		let response: Response;
 
 		if (request.method === "POST") {
-			response = await snowstormPost(request.path, request.body as object);
+			response = await snowstormPost(request.path, request.body as Record<string, unknown>);
 		} else {
 			response = await snowstormFetch(request.path, request.params);
 		}
