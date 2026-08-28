@@ -67,8 +67,48 @@ if (doFile) {
   assertContains('src/do.ts', doFile, 'RestStagingDO', 'DO extends RestStagingDO');
 }
 
+function assertNotContains(filePath, haystack, needle, testName) {
+  totalTests++;
+  if (!haystack.includes(needle)) {
+    console.log(`${GREEN}\u2713${RESET} ${testName}`);
+    passedTests++;
+  } else {
+    console.log(`${RED}\u2717${RESET} ${testName}`);
+    console.log(`  Must not contain: ${needle}`);
+    failedTests++;
+  }
+}
+
 if (catalog) {
   assertContains('src/spec/catalog.ts', catalog, 'ApiCatalog', 'catalog exports ApiCatalog');
+  // SNOMED International edge-blocks our egress; the catalog must not send the
+  // model back to a host that answers every request with an HTML 405 page.
+  assertNotContains('src/spec/catalog.ts', catalog, 'browser.ihtsdotools.org', 'catalog does not point at the blocked IHTSDO host');
+  assertContains('src/spec/catalog.ts', catalog, '/CodeSystem/$lookup', 'catalog documents the FHIR concept-read operation');
+  assertContains('src/spec/catalog.ts', catalog, '/ValueSet/$expand', 'catalog documents the FHIR ECL search operation');
+  // These three Snowstorm paths have no honest FHIR equivalent (verified against
+  // tx.fhir.org AND Ontoserver). Leaving them in the catalog would send the model
+  // at endpoints that can only 404.
+  assertNotContains('src/spec/catalog.ts', catalog, '/MAIN/descriptions', 'catalog drops description-level search (no FHIR equivalent)');
+  assertNotContains('src/spec/catalog.ts', catalog, '/concepts/{conceptId}/members', 'catalog drops reverse refset membership (no FHIR equivalent)');
+}
+
+if (http) {
+  assertContains('src/lib/http.ts', http, 'setSnomedTxBase', 'http exposes a real base-URL setter');
+  assertNotContains('src/lib/http.ts', http, 'https://browser.ihtsdotools.org', 'http default base is not the blocked IHTSDO host');
+  assertContains('src/lib/http.ts', http, 'application/fhir+json', 'http negotiates FHIR JSON');
+  // The base must be operable from config. It was documented as an override for
+  // months while actually being a module constant no env var could reach.
+  // Assert the CALL, not the identifiers: declaring SNOMED_TX_BASE on the env
+  // interface and importing the setter both pass a loose grep while the var is
+  // still ignored at runtime — which is precisely the state this file replaced.
+  assertContains('src/index.ts', index, 'setSnomedTxBase(env.SNOMED_TX_BASE)', 'index applies SNOMED_TX_BASE at init');
+}
+
+if (adapter) {
+  // ECL lives in the POST body while count/offset/filter stay in the query
+  // string; dropping request.params here silently unpaginates every search.
+  assertContains('src/lib/api-adapter.ts', adapter, 'request.params,', 'adapter forwards query params on POST');
 }
 
 if (codeMode) {

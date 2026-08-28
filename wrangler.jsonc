@@ -46,6 +46,13 @@
 				"name": "SNOWSTORM_DATA_DO"
 			}]
 	},
+	"vars": {
+		// SNOMED CT FHIR terminology base. tx.fhir.org is HL7's keyless reference
+		// server (SNOMED CT International). browser.ihtsdotools.org is NOT usable:
+		// SNOMED International edge-blocks our egress. Alternate, AU edition:
+		// "https://r4.ontoserver.csiro.au/fhir".
+		"SNOMED_TX_BASE": "https://tx.fhir.org/r4"
+	},
 	"worker_loaders": [
 		{
 			"binding": "CODE_MODE_LOADER"

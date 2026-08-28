@@ -1,166 +1,205 @@
 /**
- * Snowstorm SNOMED CT API catalog — hand-built from IHTSDO Snowstorm docs.
+ * SNOMED CT terminology catalog — FHIR R4 terminology API.
  *
- * Covers ~20 endpoints across 7 categories: concept, description, relationship,
- * hierarchy, refset, mapping, and ecl.
+ * Base URL: https://tx.fhir.org/r4 (HL7 reference terminology server).
  *
- * Base URL: https://browser.ihtsdotools.org/snowstorm/snomed-ct
- * All queries use branch /MAIN (International Edition).
+ * This is NOT the Snowstorm REST API. Every IHTSDO-operated host edge-blocks our
+ * egress by policy (an HTML 405 "Access Denied" page, any path, any header), so this server
+ * speaks FHIR terminology operations instead: CodeSystem/$lookup reads a concept and
+ * ValueSet/$expand runs ECL. Every path here was exercised live against tx.fhir.org.
  */
 
 import type { ApiCatalog } from "@bio-mcp/shared/codemode/catalog";
 
+const SCT = "http://snomed.info/sct";
+
 export const snowstormCatalog: ApiCatalog = {
-	name: "Snowstorm SNOMED CT",
-	baseUrl: "https://browser.ihtsdotools.org/snowstorm/snomed-ct",
-	version: "9.0",
+	name: "SNOMED CT (FHIR R4 terminology API)",
+	baseUrl: "https://tx.fhir.org/r4",
+	version: "SNOMED CT International 20250201 (FHIR R4)",
 	auth: "none",
-	endpointCount: 17,
+	endpointCount: 9,
 	notes:
-		"- Branch: all queries are against /MAIN (SNOMED CT International Edition)\n" +
-		"- Concept IDs are SNOMED CT identifiers (numeric strings), e.g. 73211009 = Diabetes mellitus, 404684003 = Clinical finding\n" +
-		"- ECL (Expression Constraint Language) enables powerful hierarchy queries:\n" +
-		"  - `<< 404684003` = all descendants of Clinical finding (including self)\n" +
-		"  - `< 73211009 |Diabetes mellitus|` = children of diabetes (excluding self)\n" +
-		"  - `>> 404684003` = all ancestors of Clinical finding (including self)\n" +
-		"  - `> 73211009` = parents of diabetes (excluding self)\n" +
-		"  - `^ 447562003` = members of the ICD-10 complex map refset\n" +
-		"  - `<< 404684003 : 363698007 = << 39057004` = clinical findings with finding site in structure of cerebral hemisphere\n" +
-		"- Descriptions have types: FSN (Fully Specified Name, includes semantic tag) and SYNONYM (Preferred Term is the preferred synonym)\n" +
-		"- Semantic tags in FSN indicate concept type: (disorder), (finding), (procedure), (substance), (body structure), (observable entity), (morphologic abnormality), (organism), (product), (qualifier value), (situation), (event), (physical object), (specimen), (environment), (cell structure), (cell), (link assertion), (regime/therapy)\n" +
-		"- Relationships use SNOMED CT type IDs, e.g. 116680003 = 'Is a' (parent), 363698007 = 'Finding site', 116676008 = 'Associated morphology'\n" +
-		"- ICD-10 cross-mappings: query refset members with refsetId=447562003 (ICD-10 complex map) or refsetId=816186008 (ICD-10-CM simple map)\n" +
-		"- IMPORTANT: To search descriptions by text, use /browser/MAIN/descriptions?term=... (NOT /MAIN/descriptions which only supports lookup by ID)\n" +
-		"- To search concepts by text, use /MAIN/concepts?term=... which supports text search directly\n" +
-		"- Pagination: most list endpoints return { items, total, limit, offset }. Use offset + limit params (default limit=50, max 10000)\n" +
-		"- The /browser/ prefix endpoints return enriched concept data with pt (preferred term), fsn (fully specified name), and descriptions pre-populated\n" +
-		"- Accept: application/json header is required on all requests (NO Content-Type on GET)\n" +
-		"- ⚠ ACCESS BLOCKED (2026-06): IHTSDO public endpoints return an HTML 'SNOMED International Access Denied' 405 for EVERY request from our egress IP (even nonexistent paths — edge-gateway block under the SNOMED CT Browser License / Acceptable-Usage Policy). No public unauthenticated base works; needs a self-hosted or licensed/whitelisted endpoint via the SNOWSTORM_BASE override in src/lib/http.ts",
+		`- The code system is always \`system=${SCT}\`. Concept IDs are SNOMED CT identifiers (numeric strings), e.g. 73211009 = Diabetes mellitus, 404684003 = Clinical finding, 138875005 = SNOMED CT Concept (root)\n` +
+		"- READ A CONCEPT: `api.get('/CodeSystem/$lookup', { system, code, property: '*' })`. Returns a FHIR Parameters resource: `{ resourceType: 'Parameters', parameter: [{name,valueString|valueCode|valueBoolean}|{name:'designation',part:[...]}|{name:'property',part:[{name:'code',valueCode},{name:'value...'}]}] }`\n" +
+		"- `property: '*'` is what replaces Snowstorm's /browser/ concept format. For 73211009 it returns 4 designations plus properties: parent x2, child x16, module, inactive, effectiveTime, and the concept's ATTRIBUTE relationships keyed by attribute SCTID (363698007 'Finding site' x4). There is no separate 'browser' path — pass property='*'\n" +
+		"- SEARCH / ECL: `api.post('/ValueSet/$expand', body, { count, offset, filter })` where body is\n" +
+		`  \`{ resourceType: 'ValueSet', compose: { include: [{ system: '${SCT}', filter: [{ property: 'constraint', op: '=', value: '<ECL>' }] }] } }\`\n` +
+		"  Returns `{ resourceType: 'ValueSet', expansion: { total, offset, contains: [{system,code,display}] } }`\n" +
+		"- USE THE compose.include.filter FORM, NOT the implicit URL: `?url=" + SCT + "?fhir_vs=ecl/...` returns HTTP 422 'ValueSet not found' on tx.fhir.org (it does work on the Ontoserver alternate base)\n" +
+		"- ECL covers every hierarchy call the old Snowstorm paths made (verified totals for 73211009):\n" +
+		"  - `<! 73211009` = direct children (16) | `>! 73211009` = direct parents (2)\n" +
+		"  - `< 73211009` = descendants excl. self (123) | `> 73211009` = ancestors excl. self (8)\n" +
+		"  - `<< 73211009` = descendants incl. self | `>> 73211009` = ancestors incl. self\n" +
+		"  - `^ 723264001` = members of a reference set\n" +
+		"  - `<< 404684003 : 363698007 = 39057004` = attribute refinement — clinical findings with Finding site = Pulmonary valve structure (101). This is what replaces Snowstorm's /MAIN/relationships search: it answers 'which concepts have relationship TYPE to TARGET', which is the query use of a relationship row\n" +
+		"- TEXT SEARCH: add `filter` as a QUERY param to $expand; it combines with the ECL. `filter=type 2` over `< 73211009` gives 18 hits, first 44054006 Type 2 diabetes mellitus. For an unscoped text search use ECL `<< 138875005` (the SNOMED root) with a filter\n" +
+		"- IMPLICIT VALUE SETS (GET $expand with `url`): `" + SCT + "?fhir_vs=isa/{conceptId}` (transitive descendants incl. self — 124 for 73211009), `" + SCT + "?fhir_vs=refset/{refsetId}` (reference-set members), `" + SCT + "?fhir_vs` (the whole code system; use with `filter` — note this form returns no `expansion.total`)\n" +
+		"- PAGINATION: `count` and `offset` are query params on $expand. compose-based expansions return `expansion.total`; read it before assuming you have everything\n" +
+		"- EDITIONS: pass `version` (a full edition URI) to $lookup / $validate-code / $subsumes, or `compose.include.version` to $expand. `system-version` is NOT supported on this build — it returns HTTP 500 'Unable to understand default system version'. GET /CodeSystem?url=" + SCT + "&_summary=true lists what the server holds: International 900000000000207008 (20250201 default, 20240201), US 731000124108 (20250901, 20240301, 20230301), UK 83821000000107 (20230412), NL 11000146104 (20240930), CH 2011000195101 (20230607), DK 554471000005108 (20260331), IPS 827022005 (20241216), and an experimental AT xsct edition\n" +
+		"- Descriptions still exist, but only as `designation` entries inside a $lookup result (language + use.display, e.g. 'Fully specified name' / 'Preferred'). Semantic tags remain visible inside the FSN text, e.g. 'Diabetes mellitus (disorder)'\n" +
+		"- NOT AVAILABLE on this API — do not attempt these, they were Snowstorm-only (verified against both tx.fhir.org and the Ontoserver alternate):\n" +
+		"  - Description-level search (Snowstorm's description-search paths): FHIR returns concept rows, so descriptionId, per-language acceptability maps, and description-level paging are gone. Search concepts with $expand + `filter` instead\n" +
+		"  - Reverse reference-set membership ('which refsets contain concept X'): no FHIR analogue. You can only expand a KNOWN refset and look for the concept in it\n" +
+		"  - SNOMED to ICD-10 mapping: ConceptMap/$translate with `?fhir_cm=447562003` returns HTTP 404 on both servers. The complex-map refset's additionalFields (mapTarget/mapAdvice/mapPriority) are not exposed anywhere in this API. Do not claim an ICD-10 mapping from this server\n" +
+		"  - Raw relationship rows (relationshipId, relationshipGroup, characteristicType) and Snowstorm branch/task paths\n" +
+		"- Errors are FHIR OperationOutcome, not a plain body: an unknown concept gives HTTP 404 `{resourceType:'OperationOutcome',issue:[{severity:'error',code:'not-found',...}]}`\n" +
+		"- Headers are handled by the server: Accept: application/fhir+json on GET (no Content-Type), Content-Type: application/fhir+json on POST\n" +
+		"- LICENCE CAVEAT: these servers answer anonymous queries, but SNOMED CT content is licence-encumbered. Ontoserver's own payload states 'Implementer use of SNOMED CT is not covered by this agreement'. A SNOMED CT Affiliate Licence (free in member territories, https://mlds.ihtsdotools.org) is the correct instrument before re-serving this content to third parties\n" +
+		"- The base URL is operator-settable via the SNOMED_TX_BASE worker var (default https://tx.fhir.org/r4; alternate https://r4.ontoserver.csiro.au/fhir, which serves AU-preferred display terms). Call GET /metadata if you need to confirm which server answered\n" +
+		"- Neither base is SLA-backed: tx.fhir.org is HL7's community server and r4.ontoserver.csiro.au calls itself a Sandbox. Expect occasional outages",
 	endpoints: [
 		// === Concept ===
 		{
 			method: "GET",
-			path: "/browser/MAIN/concepts/{conceptId}",
+			path: "/CodeSystem/$lookup",
 			summary:
-				"Get a concept in browser format with FSN, PT, descriptions, and relationships pre-populated",
+				"Read a SNOMED CT concept: display term, designations (FSN/synonyms), parents, children, module, effectiveTime, active status, and attribute relationships. Replaces Snowstorm's /MAIN/concepts/{id} AND /browser/MAIN/concepts/{id}.",
 			category: "concept",
-			pathParams: [
+			featured: true,
+			queryParams: [
 				{
-					name: "conceptId",
+					name: "system",
+					type: "string",
+					required: true,
+					description: `Code system URI — always ${SCT} for SNOMED CT`,
+					default: SCT,
+				},
+				{
+					name: "code",
 					type: "string",
 					required: true,
 					description: "SNOMED CT concept ID (e.g. 73211009 for Diabetes mellitus)",
 				},
-			],
-			queryParams: [],
-		},
-		{
-			method: "GET",
-			path: "/MAIN/concepts/{conceptId}",
-			summary: "Get a concept by SNOMED CT concept ID (minimal format)",
-			category: "concept",
-			pathParams: [
 				{
-					name: "conceptId",
-					type: "string",
-					required: true,
-					description: "SNOMED CT concept ID (e.g. 73211009)",
-				},
-			],
-			queryParams: [],
-		},
-		{
-			method: "GET",
-			path: "/MAIN/concepts",
-			summary:
-				"Search concepts by term string or ECL expression. Returns paginated results with items array.",
-			category: "concept",
-			queryParams: [
-				{
-					name: "term",
-					type: "string",
-					required: false,
-					description: "Search term (e.g. 'diabetes', 'heart failure'). Matches against descriptions.",
-				},
-				{
-					name: "ecl",
+					name: "property",
 					type: "string",
 					required: false,
 					description:
-						"ECL (Expression Constraint Language) query. E.g. '<< 404684003' for descendants of Clinical finding.",
+						"Which properties to return. Pass '*' for everything (designations, parent, child, module, inactive, effectiveTime, and attribute relationships keyed by attribute SCTID). Repeat the param for specific properties, e.g. property=parent&property=child.",
+					default: "*",
 				},
 				{
-					name: "activeFilter",
-					type: "boolean",
+					name: "version",
+					type: "string",
 					required: false,
-					description: "Filter by active status (default: true)",
+					description:
+						"Full SNOMED edition/version URI to read against, e.g. http://snomed.info/sct/731000124108/version/20250901 (US). Defaults to International 20250201. NOTE: the `system-version` parameter returns HTTP 500 on this server — `version` is the working name.",
+				},
+			],
+			responseShape:
+				"{ resourceType: 'Parameters', parameter: Array<{ name: 'name'|'version'|'display'|'code'|'system', valueString?: string, valueCode?: string } | { name: 'designation', part: Array<{name,valueString|valueCoding}> } | { name: 'property', part: [{name:'code',valueCode},{name:'value'|'valueString'|'valueCode'|'valueBoolean', ...}] }> }",
+			example:
+				"const r = await api.get('/CodeSystem/$lookup', { system: 'http://snomed.info/sct', code: '73211009', property: '*' });\n" +
+				"const display = r.parameter.find(p => p.name === 'display').valueString; // 'Diabetes mellitus'\n" +
+				"const children = r.parameter.filter(p => p.name === 'property' && p.part.some(x => x.name === 'code' && x.valueCode === 'child'));",
+			usageHint:
+				"This is the concept-read workhorse. The `property` entries are name/value part pairs — filter on part code, do not index positionally.",
+		},
+		{
+			method: "GET",
+			path: "/CodeSystem/$validate-code",
+			summary:
+				"Check that a SNOMED CT code exists and is valid in an edition, and get its display term. Cheaper than $lookup when you only need existence.",
+			category: "concept",
+			queryParams: [
+				{
+					name: "url",
+					type: "string",
+					required: true,
+					description: `Code system URI — ${SCT}`,
+					default: SCT,
+				},
+				{
+					name: "code",
+					type: "string",
+					required: true,
+					description: "SNOMED CT concept ID to validate",
+				},
+				{
+					name: "display",
+					type: "string",
+					required: false,
+					description: "Optional display term to check against the code (returns result=false with a message on mismatch)",
+				},
+				{
+					name: "version",
+					type: "string",
+					required: false,
+					description: "Full SNOMED edition/version URI to validate against",
+				},
+			],
+			responseShape:
+				"{ resourceType: 'Parameters', parameter: [{ name: 'result', valueBoolean }, { name: 'system', valueUri }, { name: 'code', valueCode }, { name: 'version', valueString }, { name: 'display', valueString }] }",
+			example:
+				"const r = await api.get('/CodeSystem/$validate-code', { url: 'http://snomed.info/sct', code: '73211009' });\n" +
+				"const ok = r.parameter.find(p => p.name === 'result').valueBoolean; // true",
+		},
+
+		// === Search / ECL ===
+		{
+			method: "POST",
+			path: "/ValueSet/$expand",
+			summary:
+				"Run an ECL expression, optionally combined with a text filter. The primary search verb — replaces Snowstorm's /MAIN/concepts?ecl=, /MAIN/concepts?term= and POST /MAIN/concepts/search.",
+			category: "search",
+			featured: true,
+			body: {
+				contentType: "application/fhir+json",
+				description:
+					`{"resourceType":"ValueSet","compose":{"include":[{"system":"${SCT}","filter":[{"property":"constraint","op":"=","value":"<< 73211009"}]}]}}` +
+					" — add \"version\":\"<edition URI>\" inside the include object to query a non-International edition.",
+			},
+			queryParams: [
+				{
+					name: "filter",
+					type: "string",
+					required: false,
+					description:
+						"Text filter applied on top of the ECL, e.g. 'type 2'. Case-insensitive prefix matching over designations.",
+				},
+				{
+					name: "count",
+					type: "number",
+					required: false,
+					description: "Page size. Always set this — an unbounded ECL can match hundreds of thousands of concepts.",
+					default: 50,
 				},
 				{
 					name: "offset",
 					type: "number",
 					required: false,
-					description: "Pagination offset (default: 0)",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results to return (default: 50, max: 10000)",
-				},
-				{
-					name: "definitionStatusFilter",
-					type: "string",
-					required: false,
-					description:
-						"Filter by definition status",
-					enum: ["PRIMITIVE", "FULLY_DEFINED"],
-				},
-				{
-					name: "module",
-					type: "string",
-					required: false,
-					description: "Filter by module SCTID (e.g. 900000000000207008 for core module)",
+					description: "Pagination offset. Compare against expansion.total to know when you are done.",
 				},
 			],
+			responseShape:
+				"{ resourceType: 'ValueSet', expansion: { total?: number, offset?: number, contains?: Array<{ system: string, code: string, display: string }> } }",
+			example:
+				"const ecl = v => ({ resourceType: 'ValueSet', compose: { include: [{ system: 'http://snomed.info/sct', filter: [{ property: 'constraint', op: '=', value: v }] }] } });\n" +
+				"// children of Diabetes mellitus containing 'type 2'\n" +
+				"const r = await api.post('/ValueSet/$expand', ecl('< 73211009'), { filter: 'type 2', count: 20 });\n" +
+				"const hits = r.expansion.contains; // [{code:'44054006',display:'Type 2 diabetes mellitus'}, ...]",
+			usageHint:
+				"The ECL goes in the BODY and count/offset/filter go in the third (params) argument. Do not put the ECL in the query string — the implicit ?fhir_vs=ecl/... URL returns 422 here.",
 		},
 		{
 			method: "POST",
-			path: "/MAIN/concepts/search",
+			path: "/ValueSet/$expand",
 			summary:
-				"Advanced concept search with ECL, term filters, and semantic tag filters via POST body",
-			category: "ecl",
+				"Navigate the SNOMED hierarchy with ECL operators: children, parents, descendants, ancestors. Replaces Snowstorm's /concepts/{id}/children, /parents, /ancestors and /descendants paths.",
+			category: "hierarchy",
 			body: {
-				contentType: "application/json",
+				contentType: "application/fhir+json",
 				description:
-					'{"termFilter": {"term": "diabetes"}, "eclFilter": "<< 404684003", "activeFilter": true, "limit": 50, "offset": 0}',
+					"Same ValueSet body as the search endpoint; only the ECL operator changes. `<! id` children, `>! id` parents, `< id` descendants, `> id` ancestors, `<< id` / `>> id` to include self.",
 			},
-		},
-
-		// === Description ===
-		{
-			method: "GET",
-			path: "/MAIN/descriptions",
-			summary:
-				"Look up descriptions by specific IDs or by concept ID. Does NOT support text search — use /browser/MAIN/descriptions for text search instead.",
-			category: "description",
 			queryParams: [
 				{
-					name: "descriptionIds",
-					type: "string",
+					name: "count",
+					type: "number",
 					required: false,
-					description: "Comma-separated description SCTIDs to retrieve specific descriptions",
-				},
-				{
-					name: "conceptId",
-					type: "string",
-					required: false,
-					description: "Retrieve all descriptions for a single concept ID",
-				},
-				{
-					name: "conceptIds",
-					type: "string",
-					required: false,
-					description: "Comma-separated concept IDs to retrieve descriptions for multiple concepts",
+					description: "Page size (default 50). Descendant sets are large — 73211009 has 123.",
+					default: 50,
 				},
 				{
 					name: "offset",
@@ -168,446 +207,254 @@ export const snowstormCatalog: ApiCatalog = {
 					required: false,
 					description: "Pagination offset",
 				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results (default: 50, max: 10000)",
-				},
 			],
+			example:
+				"const ecl = v => ({ resourceType: 'ValueSet', compose: { include: [{ system: 'http://snomed.info/sct', filter: [{ property: 'constraint', op: '=', value: v }] }] } });\n" +
+				"const kids = await api.post('/ValueSet/$expand', ecl('<! 73211009'), { count: 100 });   // 16 direct children\n" +
+				"const parents = await api.post('/ValueSet/$expand', ecl('>! 73211009'), { count: 100 }); // 2 direct parents",
 		},
 		{
-			method: "GET",
-			path: "/browser/MAIN/descriptions",
+			method: "POST",
+			path: "/ValueSet/$expand",
 			summary:
-				"Text search descriptions by term. This is the primary endpoint for searching SNOMED descriptions by text. Returns descriptions with concept details (FSN, PT) included. Use this instead of /MAIN/descriptions when searching by text.",
-			category: "description",
-			queryParams: [
-				{
-					name: "term",
-					type: "string",
-					required: true,
-					description: "Search term (e.g. 'atrial fibrillation', 'diabetes mellitus'). Uses case-insensitive multi-prefix matching.",
-				},
-				{
-					name: "active",
-					type: "boolean",
-					required: false,
-					description: "Filter active descriptions only",
-				},
-				{
-					name: "conceptActive",
-					type: "boolean",
-					required: false,
-					description: "Filter by concept active status",
-				},
-				{
-					name: "semanticTags",
-					type: "string",
-					required: false,
-					description: "Filter by semantic tag(s) (e.g. 'disorder', 'finding', 'procedure')",
-				},
-				{
-					name: "language",
-					type: "string",
-					required: false,
-					description: "Language code (e.g. 'en')",
-				},
-				{
-					name: "groupByConcept",
-					type: "boolean",
-					required: false,
-					description: "Group results by concept, returning one description per concept (default: false)",
-				},
-				{
-					name: "searchMode",
-					type: "string",
-					required: false,
-					description: "Search mode",
-					enum: ["STANDARD", "REGEX", "WHOLE_WORD"],
-				},
-				{
-					name: "offset",
-					type: "number",
-					required: false,
-					description: "Pagination offset",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results (default: 50)",
-				},
-			],
-		},
-
-		// === Hierarchy ===
-		{
-			method: "GET",
-			path: "/browser/MAIN/concepts/{conceptId}/children",
-			summary:
-				"Get direct children of a concept in browser format (with PT, FSN). Useful for hierarchy navigation.",
-			category: "hierarchy",
-			pathParams: [
-				{
-					name: "conceptId",
-					type: "string",
-					required: true,
-					description: "Parent concept ID",
-				},
-			],
-			queryParams: [
-				{
-					name: "form",
-					type: "string",
-					required: false,
-					description: "Relationship form",
-					enum: ["stated", "inferred"],
-					default: "inferred",
-				},
-				{
-					name: "offset",
-					type: "number",
-					required: false,
-					description: "Pagination offset",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results (default: 50)",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/MAIN/concepts/{conceptId}/parents",
-			summary: "Get direct parents (Is-a targets) of a concept",
-			category: "hierarchy",
-			pathParams: [
-				{
-					name: "conceptId",
-					type: "string",
-					required: true,
-					description: "Child concept ID",
-				},
-			],
-			queryParams: [
-				{
-					name: "form",
-					type: "string",
-					required: false,
-					description: "Relationship form",
-					enum: ["stated", "inferred"],
-					default: "inferred",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/browser/MAIN/concepts/{conceptId}/parents",
-			summary: "Get direct parents of a concept in browser format (with PT, FSN)",
-			category: "hierarchy",
-			pathParams: [
-				{
-					name: "conceptId",
-					type: "string",
-					required: true,
-					description: "Child concept ID",
-				},
-			],
-			queryParams: [
-				{
-					name: "form",
-					type: "string",
-					required: false,
-					description: "Relationship form",
-					enum: ["stated", "inferred"],
-					default: "inferred",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/browser/MAIN/concepts/{conceptId}/ancestors",
-			summary:
-				"Get all ancestors (transitive parents) of a concept. Warning: can return large result sets for deep hierarchies.",
-			category: "hierarchy",
-			pathParams: [
-				{
-					name: "conceptId",
-					type: "string",
-					required: true,
-					description: "Concept ID",
-				},
-			],
-			queryParams: [
-				{
-					name: "form",
-					type: "string",
-					required: false,
-					description: "Relationship form",
-					enum: ["stated", "inferred"],
-					default: "inferred",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/MAIN/concepts/{conceptId}/descendants",
-			summary:
-				"Get all descendants (transitive children) of a concept. Use with limit to avoid huge responses. Returns { items, total, offset, limit }.",
-			category: "hierarchy",
-			pathParams: [
-				{
-					name: "conceptId",
-					type: "string",
-					required: true,
-					description: "Concept ID",
-				},
-			],
-			queryParams: [
-				{
-					name: "stated",
-					type: "boolean",
-					required: false,
-					description: "Use stated relationships (default: false = inferred)",
-				},
-				{
-					name: "offset",
-					type: "number",
-					required: false,
-					description: "Pagination offset",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results (default: 50). Use a small limit as descendants can be very numerous.",
-				},
-			],
-		},
-
-		// === Relationship ===
-		{
-			method: "GET",
-			path: "/MAIN/relationships",
-			summary:
-				"Search relationships by source, destination, or type. Returns paginated relationship records.",
+				"Find concepts by their relationships (ECL attribute refinement). Replaces the query use of Snowstorm's /MAIN/relationships: 'which concepts have attribute TYPE pointing at TARGET'.",
 			category: "relationship",
-			queryParams: [
-				{
-					name: "source",
-					type: "string",
-					required: false,
-					description: "Source concept ID (the concept that has the relationship)",
-				},
-				{
-					name: "destination",
-					type: "string",
-					required: false,
-					description: "Destination concept ID (the target of the relationship)",
-				},
-				{
-					name: "type",
-					type: "string",
-					required: false,
-					description:
-						"Relationship type SCTID. Common: 116680003=Is a, 363698007=Finding site, 116676008=Associated morphology",
-				},
-				{
-					name: "active",
-					type: "boolean",
-					required: false,
-					description: "Filter by active status",
-				},
-				{
-					name: "characteristicType",
-					type: "string",
-					required: false,
-					description: "Filter by characteristic type",
-					enum: ["STATED_RELATIONSHIP", "INFERRED_RELATIONSHIP"],
-				},
-				{
-					name: "offset",
-					type: "number",
-					required: false,
-					description: "Pagination offset",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results (default: 50)",
-				},
-			],
-		},
-
-		// === Reference Set (Refset) ===
-		{
-			method: "GET",
-			path: "/MAIN/members",
-			summary:
-				"Search reference set members. Use refsetId to query specific refsets (e.g. ICD-10 map, language refsets).",
-			category: "refset",
-			queryParams: [
-				{
-					name: "referenceSet",
-					type: "string",
-					required: false,
-					description:
-						"Refset concept ID. E.g. 447562003=ICD-10 complex map, 816186008=ICD-10-CM simple map, 900000000000509007=US English language refset",
-				},
-				{
-					name: "referencedComponentId",
-					type: "string",
-					required: false,
-					description: "SCTID of the referenced component (concept, description, or relationship)",
-				},
-				{
-					name: "active",
-					type: "boolean",
-					required: false,
-					description: "Filter by active status",
-				},
-				{
-					name: "offset",
-					type: "number",
-					required: false,
-					description: "Pagination offset",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results (default: 50)",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/MAIN/concepts/{conceptId}/members",
-			summary:
-				"Get reference set members for a specific concept (all refsets the concept belongs to, or all members of a concept-based refset).",
-			category: "refset",
-			pathParams: [
-				{
-					name: "conceptId",
-					type: "string",
-					required: true,
-					description: "Concept ID to get refset memberships for",
-				},
-			],
-			queryParams: [
-				{
-					name: "offset",
-					type: "number",
-					required: false,
-					description: "Pagination offset",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results (default: 50)",
-				},
-			],
-		},
-
-		// === Mapping (SNOMED to ICD-10) ===
-		{
-			method: "GET",
-			path: "/MAIN/members",
-			summary:
-				"Get ICD-10 mappings for a SNOMED concept. Query with referenceSet=447562003 (ICD-10 complex map) and referencedComponentId={conceptId}.",
-			category: "mapping",
-			queryParams: [
-				{
-					name: "referenceSet",
-					type: "string",
-					required: true,
-					description:
-						"Set to 447562003 for ICD-10 complex map or 816186008 for ICD-10-CM simple map",
-				},
-				{
-					name: "referencedComponentId",
-					type: "string",
-					required: true,
-					description: "SNOMED CT concept ID to find ICD-10 mapping for",
-				},
-				{
-					name: "active",
-					type: "boolean",
-					required: false,
-					description: "Filter by active status (default: true)",
-				},
-				{
-					name: "offset",
-					type: "number",
-					required: false,
-					description: "Pagination offset",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results (default: 50)",
-				},
-			],
-		},
-
-		// === ECL (Expression Constraint Language) ===
-		{
-			method: "GET",
-			path: "/MAIN/concepts",
-			summary:
-				"Execute ECL query via GET. Pass ECL expression as the 'ecl' query parameter. Returns paginated concept results.",
-			category: "ecl",
-			queryParams: [
-				{
-					name: "ecl",
-					type: "string",
-					required: true,
-					description:
-						"ECL expression. Examples: '<< 73211009' (all types of diabetes), '< 404684003 : 363698007 = << 39057004' (clinical findings with finding site in cerebral hemisphere)",
-				},
-				{
-					name: "term",
-					type: "string",
-					required: false,
-					description: "Additional term filter to combine with ECL",
-				},
-				{
-					name: "activeFilter",
-					type: "boolean",
-					required: false,
-					description: "Filter by active status",
-				},
-				{
-					name: "offset",
-					type: "number",
-					required: false,
-					description: "Pagination offset",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Number of results (default: 50, max: 10000)",
-				},
-			],
-		},
-		{
-			method: "POST",
-			path: "/MAIN/concepts/search",
-			summary:
-				"Execute advanced ECL search via POST with complex filters. Supports combined ECL + term + semantic tag filtering.",
-			category: "ecl",
 			body: {
-				contentType: "application/json",
+				contentType: "application/fhir+json",
 				description:
-					'{"eclFilter": "<< 73211009", "termFilter": {"term": "type 2"}, "activeFilter": true, "returnIdOnly": false, "offset": 0, "limit": 50}',
+					"ValueSet body whose constraint value is a refinement, e.g. \"<< 404684003 : 363698007 = 39057004\" (clinical findings with Finding site = Pulmonary valve structure). Common attribute SCTIDs: 116680003 Is a, 363698007 Finding site, 116676008 Associated morphology, 246075003 Causative agent, 127489000 Has active ingredient.",
 			},
+			queryParams: [
+				{
+					name: "count",
+					type: "number",
+					required: false,
+					description: "Page size",
+					default: 50,
+				},
+				{
+					name: "offset",
+					type: "number",
+					required: false,
+					description: "Pagination offset",
+				},
+			],
+			example:
+				"const body = { resourceType: 'ValueSet', compose: { include: [{ system: 'http://snomed.info/sct', filter: [{ property: 'constraint', op: '=', value: '<< 404684003 : 363698007 = 39057004' }] }] } };\n" +
+				"const r = await api.post('/ValueSet/$expand', body, { count: 10 }); // expansion.total === 101",
+			usageHint:
+				"Raw relationship ROWS (relationshipId, relationshipGroup, characteristicType) are not available on this API. To read one concept's own outgoing attributes, use $lookup with property='*' instead.",
+		},
+		{
+			method: "GET",
+			path: "/ValueSet/$expand",
+			summary:
+				"Expand an implicit SNOMED ValueSet by URL: transitive descendants (fhir_vs=isa/{id}), reference-set members (fhir_vs=refset/{id}), or the whole code system (fhir_vs) for unscoped text search.",
+			category: "refset",
+			queryParams: [
+				{
+					name: "url",
+					type: "string",
+					required: true,
+					description:
+						`Implicit ValueSet URI. '${SCT}?fhir_vs=isa/73211009' = all descendants including self (124). '${SCT}?fhir_vs=refset/723264001' = members of that reference set. '${SCT}?fhir_vs' = the entire code system — only useful with a filter, and this form returns no expansion.total.`,
+				},
+				{
+					name: "filter",
+					type: "string",
+					required: false,
+					description: "Text filter, e.g. 'atrial fibrillation'",
+				},
+				{
+					name: "count",
+					type: "number",
+					required: false,
+					description: "Page size",
+					default: 50,
+				},
+				{
+					name: "offset",
+					type: "number",
+					required: false,
+					description: "Pagination offset",
+				},
+			],
+			responseShape:
+				"{ resourceType: 'ValueSet', name?: string, expansion: { total?: number, offset?: number, contains?: Array<{system,code,display}> } }",
+			example:
+				"const r = await api.get('/ValueSet/$expand', { url: 'http://snomed.info/sct?fhir_vs=refset/723264001', count: 50 });\n" +
+				"const members = r.expansion.contains;",
+			usageHint:
+				"The ecl/ variant of this implicit URL (fhir_vs=ecl/...) returns 422 on tx.fhir.org — use POST $expand with a compose.include.filter constraint for ECL.",
+		},
+
+		// === Subsumption ===
+		{
+			method: "GET",
+			path: "/CodeSystem/$subsumes",
+			summary:
+				"Test the hierarchical relationship between two SNOMED concepts without expanding anything. Returns subsumes / subsumed-by / equivalent / not-subsumed.",
+			category: "hierarchy",
+			queryParams: [
+				{
+					name: "system",
+					type: "string",
+					required: true,
+					description: `Code system URI — ${SCT}`,
+					default: SCT,
+				},
+				{
+					name: "codeA",
+					type: "string",
+					required: true,
+					description: "First concept ID (the candidate ancestor), e.g. 73211009",
+				},
+				{
+					name: "codeB",
+					type: "string",
+					required: true,
+					description: "Second concept ID (the candidate descendant), e.g. 44054006",
+				},
+				{
+					name: "version",
+					type: "string",
+					required: false,
+					description: "Full SNOMED edition/version URI to test against",
+				},
+			],
+			responseShape:
+				"{ resourceType: 'Parameters', parameter: [{ name: 'outcome', valueCode: 'equivalent'|'subsumes'|'subsumed-by'|'not-subsumed' }] }",
+			example:
+				"const r = await api.get('/CodeSystem/$subsumes', { system: 'http://snomed.info/sct', codeA: '73211009', codeB: '44054006' });\n" +
+				"r.parameter[0].valueCode; // 'subsumes' — Diabetes mellitus subsumes Type 2 diabetes mellitus",
+		},
+
+		// === Editions / server capability ===
+		{
+			method: "GET",
+			path: "/CodeSystem",
+			summary:
+				"List the SNOMED CT editions and versions this terminology server holds. Use the returned version URIs with the `version` parameter on $lookup / $validate-code / $subsumes.",
+			category: "edition",
+			queryParams: [
+				{
+					name: "url",
+					type: "string",
+					required: false,
+					description: `Filter to SNOMED CT with ${SCT}`,
+					default: SCT,
+				},
+				{
+					name: "_summary",
+					type: "string",
+					required: false,
+					description: "Pass 'true' to get a compact Bundle without the full CodeSystem bodies",
+					enum: ["true", "false", "count"],
+				},
+			],
+			responseShape:
+				"{ resourceType: 'Bundle', total: number, entry: Array<{ resource: { resourceType: 'CodeSystem', url: string, version?: string, title?: string } }> }",
+			example:
+				"const r = await api.get('/CodeSystem', { url: 'http://snomed.info/sct', _summary: 'true' });\n" +
+				"const versions = r.entry.map(e => e.resource.version).filter(Boolean);",
+		},
+		{
+			method: "GET",
+			path: "/metadata",
+			summary:
+				"Server CapabilityStatement — FHIR version, software name/version, and which terminology operations are supported. Use it to confirm which server SNOMED_TX_BASE is actually pointing at.",
+			category: "edition",
+			queryParams: [
+				{
+					name: "_summary",
+					type: "string",
+					required: false,
+					description: "Pass 'true' for the compact form",
+					enum: ["true", "false"],
+				},
+			],
+			responseShape:
+				"{ resourceType: 'CapabilityStatement', fhirVersion: string, software: { name: string, version: string }, rest: [...] }",
+			example:
+				"const meta = await api.get('/metadata', { _summary: 'true' });\n" +
+				"meta.software.name; // 'FHIRsmith' on tx.fhir.org, 'Ontoserver' on the CSIRO alternate",
+		},
+	],
+	workflows: [
+		{
+			title: "Concept card: display, FSN, parents and children",
+			description:
+				"One $lookup with property='*' gives everything the old /browser/MAIN/concepts/{id} path did. Parses the FHIR Parameters part-pairs into a flat object.",
+			keywords: ["concept", "lookup", "browser", "fsn", "parents", "children", "detail"],
+			code: [
+				"const SCT = 'http://snomed.info/sct';",
+				"const r = await api.get('/CodeSystem/$lookup', { system: SCT, code: '73211009', property: '*' });",
+				"const params = r.parameter || [];",
+				"const scalar = n => (params.find(p => p.name === n) || {}).valueString;",
+				"const propVal = p => { const v = (p.part || []).find(x => x.name !== 'code'); return v && (v.valueString ?? v.valueCode ?? v.valueBoolean ?? v.valueInteger); };",
+				"const props = {};",
+				"for (const p of params.filter(p => p.name === 'property')) {",
+				"  const code = ((p.part || []).find(x => x.name === 'code') || {}).valueCode;",
+				"  if (!code) continue;",
+				"  (props[code] = props[code] || []).push(propVal(p));",
+				"}",
+				"const designations = params.filter(p => p.name === 'designation').map(d => ({",
+				"  language: ((d.part || []).find(x => x.name === 'language') || {}).valueCode,",
+				"  use: (((d.part || []).find(x => x.name === 'use') || {}).valueCoding || {}).display,",
+				"  value: ((d.part || []).find(x => x.name === 'value') || {}).valueString,",
+				"}));",
+				"return { code: '73211009', display: scalar('display'), edition: scalar('version'), designations, parents: props.parent, children: props.child, attributes: props };",
+			].join("\n"),
+		},
+		{
+			title: "ECL search with paging (children, descendants, refinement)",
+			description:
+				"Pages a ValueSet/$expand until expansion.total is exhausted. Works for any ECL, including attribute refinement.",
+			keywords: ["ecl", "search", "expand", "paging", "descendants", "children", "refinement"],
+			code: [
+				"const SCT = 'http://snomed.info/sct';",
+				"const eclBody = (v) => ({ resourceType: 'ValueSet', compose: { include: [{ system: SCT, filter: [{ property: 'constraint', op: '=', value: v }] }] } });",
+				"async function eclAll(expression, opts = {}) {",
+				"  const pageSize = opts.count || 200;",
+				"  const max = opts.max || 1000;",
+				"  const rows = [];",
+				"  let offset = 0, total = null;",
+				"  while (rows.length < max) {",
+				"    const q = { count: pageSize, offset };",
+				"    if (opts.filter) q.filter = opts.filter;",
+				"    const r = await api.post('/ValueSet/$expand', eclBody(expression), q);",
+				"    const page = (r.expansion && r.expansion.contains) || [];",
+				"    if (total === null) total = r.expansion && r.expansion.total;",
+				"    rows.push(...page);",
+				"    offset += page.length;",
+				"    if (!page.length || (typeof total === 'number' && offset >= total)) break;",
+				"  }",
+				"  return { total, complete: typeof total === 'number' && rows.length >= total, rows };",
+				"}",
+				"// direct children of Diabetes mellitus",
+				"return await eclAll('<! 73211009');",
+			].join("\n"),
+		},
+		{
+			title: "Cross-edition check: does a concept differ between editions?",
+			description:
+				"Reads the same concept in two editions with the `version` parameter. Use the edition URIs from GET /CodeSystem. Note `system-version` returns HTTP 500 on tx.fhir.org — `version` is the working parameter.",
+			keywords: ["edition", "version", "us", "uk", "international", "compare"],
+			code: [
+				"const SCT = 'http://snomed.info/sct';",
+				"const editions = {",
+				"  international: 'http://snomed.info/sct/900000000000207008/version/20250201',",
+				"  us: 'http://snomed.info/sct/731000124108/version/20250901',",
+				"  uk: 'http://snomed.info/sct/83821000000107/version/20230412',",
+				"};",
+				"const out = {};",
+				"for (const [name, version] of Object.entries(editions)) {",
+				"  const r = await api.get('/CodeSystem/$lookup', { system: SCT, code: '73211009', version });",
+				"  const p = n => (( r.parameter || []).find(x => x.name === n) || {}).valueString;",
+				"  out[name] = { display: p('display'), version: p('version') };",
+				"}",
+				"return out;",
+			].join("\n"),
 		},
 	],
 };

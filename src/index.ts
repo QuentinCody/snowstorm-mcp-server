@@ -4,6 +4,7 @@ import { McpServer } from "@bio-mcp/shared/mcp";
 import { registerQueryData } from "./tools/query-data";
 import { registerGetSchema } from "./tools/get-schema";
 import { registerCodeMode } from "./tools/code-mode";
+import { setSnomedTxBase } from "./lib/http";
 import { SnowstormDataDO } from "./do";
 
 // Export Durable Object classes
@@ -12,6 +13,12 @@ export { SnowstormDataDO };
 interface SnowstormEnv {
     SNOWSTORM_DATA_DO: DurableObjectNamespace;
     CODE_MODE_LOADER: WorkerLoader;
+    /**
+     * SNOMED CT FHIR terminology base URL. Defaults to https://tx.fhir.org/r4
+     * (see src/lib/http.ts). Set it to https://r4.ontoserver.csiro.au/fhir to
+     * query the AU extension, or to a licensed/self-hosted terminology server.
+     */
+    SNOMED_TX_BASE?: string;
 }
 
 export class MyMCP extends StatelessMcpWorker {
@@ -24,6 +31,12 @@ export class MyMCP extends StatelessMcpWorker {
 
     	configureCitationSigning(this.env);
         const env = this.env as unknown as SnowstormEnv;
+
+        // Terminology base is operable without a code change (wrangler var or secret)
+        if (env.SNOMED_TX_BASE) {
+            setSnomedTxBase(env.SNOMED_TX_BASE);
+        }
+
         registerQueryData(this.server, env);
         registerGetSchema(this.server, env);
         registerCodeMode(this.server, env);
