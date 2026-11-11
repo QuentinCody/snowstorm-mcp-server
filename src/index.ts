@@ -4,7 +4,6 @@ import { McpServer } from "@bio-mcp/shared/mcp";
 import { registerQueryData } from "./tools/query-data";
 import { registerGetSchema } from "./tools/get-schema";
 import { registerCodeMode } from "./tools/code-mode";
-import { setSnomedTxBase } from "./lib/http";
 import { SnowstormDataDO } from "./do";
 
 // Export Durable Object classes
@@ -31,11 +30,6 @@ export class MyMCP extends StatelessMcpWorker {
 
     	configureCitationSigning(this.env);
         const env = this.env as unknown as SnowstormEnv;
-
-        // Terminology base is operable without a code change (wrangler var or secret)
-        if (env.SNOMED_TX_BASE) {
-            setSnomedTxBase(env.SNOMED_TX_BASE);
-        }
 
         registerQueryData(this.server, env);
         registerGetSchema(this.server, env);

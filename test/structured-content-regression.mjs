@@ -99,10 +99,9 @@ if (http) {
   assertContains('src/lib/http.ts', http, 'application/fhir+json', 'http negotiates FHIR JSON');
   // The base must be operable from config. It was documented as an override for
   // months while actually being a module constant no env var could reach.
-  // Assert the CALL, not the identifiers: declaring SNOMED_TX_BASE on the env
-  // interface and importing the setter both pass a loose grep while the var is
-  // still ignored at runtime — which is precisely the state this file replaced.
-  assertContains('src/index.ts', index, 'setSnomedTxBase(env.SNOMED_TX_BASE)', 'index applies SNOMED_TX_BASE at init');
+  // Code Mode binds each instance's env to its catalog, citation and adapter;
+  // behavioral tests verify alternate/default instances cannot retarget each other.
+  assertContains('src/tools/code-mode.ts', codeMode, 'createSnowstormApiFetch(baseUrl)', 'code-mode binds its configured base to the adapter');
 }
 
 if (adapter) {

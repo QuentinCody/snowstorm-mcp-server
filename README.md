@@ -1,107 +1,91 @@
 # Snowstorm MCP Server
 
-This is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server. It lets MCP clients (Claude Desktop, Claude Code, Continue, etc.) query **SNOMED CT** in natural language. It is one of 100+ servers in the [Bio MCP](../../README.md) monorepo.
+This Worker keeps the `snowstorm` name and uses public **FHIR R4 terminology services**. It does not implement the Snowstorm REST API. The default is `https://tx.fhir.org/r4`; `SNOMED_TX_BASE` can select another operator-configured service, including `https://r4.ontoserver.csiro.au/fhir`. Each instance binds requests, discovery and citations to its own host.
 
-## Which upstream this talks to
+October 5, 2026 native reads and local Worker qualification cover both candidate hosts. Earlier edge and runtime failures remain historical observations. No host was switched in production and no new backend was provisioned. SnowstormX is a separate optional backend; its release notes do not establish either current host's capabilities.
 
-The server keeps the `snowstorm` name, but it no longer speaks the Snowstorm REST API.
-SNOMED International edge-blocks our egress: every request to `browser.ihtsdotools.org`
-(any path, any header, from any Worker in this fleet) returns an HTML 405
-"SNOMED International Access Denied" page. That is a policy block on the caller, so no
-header or URL change recovers it.
+## Tools and transport
 
-SNOMED CT content now comes from a **FHIR R4 terminology server**, keyless:
+Each tool has both `snowstorm_` and `mcp_snowstorm_` aliases:
 
-| Base | Edition | Role |
-| --- | --- | --- |
-| `https://tx.fhir.org/r4` | SNOMED CT International (20250201) + US/UK/NL/CH/DK/AT/IPS | **default** |
-| `https://r4.ontoserver.csiro.au/fhir` | SNOMED CT AU extension | alternate — returns AU-preferred display terms (73211009 is "Diabetes", not "Diabetes mellitus") |
+- `search`: discover 14 catalog entries (12 distinct method/path routes) and five workflow recipes.
+- `execute`: run Code Mode JavaScript with `api.get`, read-only `api.post`, discovery and staging helpers.
+- `query_data`: query staged results using SQL.
+- `get_schema`: inspect staged tables or list session datasets.
 
-Set the `SNOMED_TX_BASE` worker var (see `wrangler.jsonc`) to retarget it — at a
-different public server, or at a licensed/self-hosted terminology server. No code
-change and no redeploy of the source is needed to switch.
+Success and error responses contain both `content` and `structuredContent`, with verifiable citations and explicit error flags. The complete composed response stages above 30 KiB, reserving space for SDK metadata. Structured content remains below 100,000 bytes. Native HTTP failures preserve status, source URL and up to 64 KiB of decoded error-body evidence, with a hash and completeness flag. A native translation `result=false` is distinct from an HTTP failure.
 
-### What this changes for callers
+## Discover the actual host
 
-The API **shape** changed; a client that hardcoded `/MAIN/...` paths will break.
+```javascript
+const capability = await api.get('/metadata');
+const terminology = await api.get('/metadata', { mode: 'terminology' });
+const editions = await api.get('/CodeSystem', {
+  url: 'http://snomed.info/sct', _summary: 'true', _count: 20
+});
+return { capability, terminology, editions };
+```
 
-| To do this | Call |
+Large resources return stage handles. Retain those handles and their full canonical payloads. A bounded CodeSystem or ConceptMap page is not an atomic inventory. Replay an observed native Bundle `link.url` with `relation: 'next'` through `api.get('/__page', { url: nextUrl })`; opaque query parameters are preserved and links must remain within the configured FHIR search service.
+
+Software versions, generated metadata dates, map business versions and SNOMED content editions are different fields. Select an edition from this host's CodeSystem resources and check the version returned by lookup/validation. Display terms depend on the actual edition and version; a blanket International-versus-Australian display rule is not valid.
+
+## Concepts, ECL and mappings
+
+| Task | Operation |
 | --- | --- |
-| Read a concept (display, FSN, parents, children, attributes) | `GET /CodeSystem/$lookup?system=http://snomed.info/sct&code={id}&property=*` |
-| Run ECL, with optional text filter | `POST /ValueSet/$expand` with `compose.include.filter` `{property:"constraint",op:"=",value:"<ECL>"}`, plus `?count=&offset=&filter=` |
-| Children / parents / descendants / ancestors | ECL `<! id` / `>! id` / `< id` / `> id` |
-| Find concepts by relationship | ECL refinement, e.g. `<< 404684003 : 363698007 = 39057004` |
-| Reference-set members | `GET /ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=refset/{id}` |
-| Subsumption test | `GET /CodeSystem/$subsumes` |
-| Pick an edition | `version=<edition URI>` (NOT `system-version`, which returns HTTP 500 on this build) |
+| Concept, designations and properties | `GET /CodeSystem/$lookup` with `system`, `code`, `version`, `property: '*'` |
+| Validation | `GET /CodeSystem/$validate-code` |
+| Subsumption | `GET /CodeSystem/$subsumes` |
+| ECL expansion | `POST /ValueSet/$expand`, with ECL in `compose.include.filter` and `count`, `offset`, `filter` in query parameters |
+| Map discovery/read | `GET /ConceptMap`, `GET /ConceptMap/{id}` |
+| Translation | `GET` or read-only `POST /ConceptMap/$translate` |
 
-**Gone, with no honest equivalent** — do not claim these work:
+FHIR concept results do not provide all former Snowstorm description IDs, raw relationship rows, branch/task operations or reverse reference-set membership. ECL expansion counts and paging depend on the source edition; preserve each native page and its parameters. Native language defaults can differ between HTTP clients, so compare request context along with results.
 
-- Description-level search: FHIR returns concept rows, so `descriptionId`, per-language
-  acceptability maps, and description-level paging are unavailable.
-- Reverse reference-set membership ("which refsets contain concept X").
-- **SNOMED to ICD-10 mapping.** `ConceptMap/$translate` with `?fhir_cm=447562003` returns
-  HTTP 404 on both candidate servers, and the complex map's `mapTarget`/`mapAdvice`/
-  `mapPriority` fields are not exposed anywhere in this API.
-- Raw relationship rows and Snowstorm branch/task paths.
+Choose a loaded map's canonical URL, business version and source/target scope. Preserve every match, equivalence, source/target Coding, comment, dependency and product. `result=true` does not make every match equivalent, and reverse translation does not imply an invertible map.
 
-### Licence
+**A requested map version is not proof of a pin.** The October 5 tx.fhir.org probe returned `http://hl7.org/fhir/ConceptMap/101|4.0.1` for a nonexistent requested version. Ontoserver returned an explicit native 404 for a nonexistent version of its sampled state map. The translation recipe checks returned `source`/`originMap` canonical evidence; absent or unversioned evidence cannot confirm a version. Its specimen-map example applies to the observed default host and is not a claim of SNOMED-to-ICD-10 coverage or clinical applicability.
 
-SNOMED CT content is licence-encumbered. Both servers answer anonymous queries, but
-Ontoserver's own payload states "Implementer use of SNOMED CT is not covered by this
-agreement". Obtain a SNOMED CT Affiliate Licence (free in member territories,
-<https://mlds.ihtsdotools.org>) before re-serving this content to third parties.
+## Lossless FHIR SQL projection
 
-## Connect
+Staged native FHIR resources expose `fhir_nodes`, one row per JSON node:
 
-The server is deployed and ready at:
+- `pointer` and `parent_pointer`: JSON Pointer identity and parent relationship.
+- `member`, `ordinal`, `node_index`: field or array position and source traversal order.
+- `kind`, `child_count`: scalar/container type, including explicit empty objects/arrays and nulls.
+- `value_json`: typed scalar JSON; `value_text`: exact strings, including leading zeros.
 
-```
-https://snowstorm-mcp-server.quentincody.workers.dev/mcp
-```
+Join through parent pointers and preserve ordinal positions. Repeated `Parameters.part`, map elements, target matches and Coding fields must not be merged by name. The `payloads` table retains the complete canonical resource; SQL projection does not rewrite it. Very large text cells may use `content_chunks`, as shown by the returned schema.
 
-Add it to your MCP client (Claude Desktop → Settings → Developer → Edit Config):
+For example, find all occurrences of a source code while retaining their parent identities:
 
-```json
-{
-  "mcpServers": {
-    "snowstorm": {
-      "command": "npx",
-      "args": ["mcp-remote", "https://snowstorm-mcp-server.quentincody.workers.dev/mcp"]
-    }
-  }
-}
+```sql
+SELECT pointer, parent_pointer, value_text
+FROM fhir_nodes
+WHERE member = 'code' AND value_text = 'CNJT'
+ORDER BY node_index;
 ```
 
-For local development the server runs at `http://localhost:8829/mcp` (start it with `./scripts/dev-servers.sh snowstorm`):
-
-```json
-{
-  "mcpServers": {
-    "snowstorm-local": {
-      "command": "npx",
-      "args": ["mcp-remote", "http://localhost:8829/mcp"]
-    }
-  }
-}
-```
-
-## Tools
-
-- `snowstorm_search` — discover available API operations (Code Mode catalog search, 9 FHIR terminology operations + 3 workflow recipes)
-- `snowstorm_execute` — **Code Mode**: write JavaScript in a V8 isolate (`api.get()` / `api.post()` / `searchSpec()`) instead of issuing tool calls one by one
-- `snowstorm_query_data` — run SQL over large responses auto-staged into a per-session SQLite database
-- `snowstorm_get_schema` — inspect the inferred schema of a staged dataset
-
-Large responses (>30KB) are auto-staged into a queryable SQLite database; the tools return a `data_access_id` you can query with SQL.
-
-Every tool returns both a human-readable `content` summary and a structured `structuredContent` payload.
+Preserve native copyright and licence metadata. Anonymous terminology access does not establish redistribution rights. [FHIR R4 translation semantics](https://hl7.org/fhir/R4/conceptmap-operation-translate.html) and [Ontoserver map documentation](https://ontoserver.csiro.au/docs/6.18.4/api-fhir-conceptmap.html) describe the operation contracts; actual loaded content remains host-specific.
 
 ## Development
 
 ```bash
-./scripts/dev-servers.sh snowstorm            # run locally (port 8829)
-pnpm --filter snowstorm-mcp-server run deploy   # deploy to Cloudflare Workers
+./scripts/dev-servers.sh snowstorm
+pnpm --filter snowstorm-mcp-server run type-check
+pnpm exec vitest run servers/snowstorm-mcp-server
+node scripts/verify-server.mjs snowstorm --url http://127.0.0.1:8829/mcp --json
 ```
 
-See [`docs/adding-mcp-servers.md`](../../docs/adding-mcp-servers.md) and the root [README](../../README.md) for the full architecture (Code Mode, staging, portals).
+The configured production MCP URL is `https://snowstorm-mcp-server.quentincody.workers.dev/mcp`. Local acceptance does not establish deployment of these changes. Detailed evidence is in [the October 5 review](../../docs/audits/2026-10-05-snowstorm-review.md).
+
+<!-- license-and-data-terms:start -->
+## License and data terms
+
+The code in this repository is licensed under the Apache License 2.0 (see `LICENSE`).
+If you use it in your work, please cite it (see `CITATION.cff`). Citation is requested, not required.
+
+The license covers the code only. Data that this server returns comes from SNOMED CT via FHIR terminology server and stays under the terms of that source: SNOMED CT affiliate license.
+You are responsible for your use of the data under those terms.
+<!-- license-and-data-terms:end -->

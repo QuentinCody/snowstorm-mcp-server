@@ -2,8 +2,8 @@
  * SNOMED CT terminology HTTP client (FHIR R4 terminology API).
  *
  * Default base: https://tx.fhir.org/r4 — HL7's reference terminology server.
- * It serves SNOMED CT International (20250201 at time of writing) plus 11 other
- * editions, needs no key and no registration, and Cloudflare egress reaches it.
+ * Earlier probes found International 20250201 and other editions with keyless
+ * access. Discover current availability/versions; those observations are not a pin.
  *
  * Why not Snowstorm any more: SNOMED International blocks our egress at its edge
  * gateway. Every request to browser.ihtsdotools.org — any path, any header, from
@@ -30,8 +30,8 @@ import { restFetch, type RestFetchOptions } from "@bio-mcp/shared/http/rest-fetc
 export const DEFAULT_SNOMED_TX_BASE = "https://tx.fhir.org/r4";
 
 /**
- * Known keyless SNOMED CT FHIR terminology endpoints. Both were verified
- * reachable from a deployed Cloudflare Worker; neither is SLA-backed.
+ * Historically reachable keyless SNOMED CT FHIR terminology endpoints.
+ * Current content/capabilities require discovery; neither is SLA-backed.
  */
 export const KNOWN_SNOMED_TX_ENDPOINTS = [
 	{

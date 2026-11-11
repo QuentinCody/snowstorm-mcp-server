@@ -6,49 +6,37 @@
  * This is NOT the Snowstorm REST API. Every IHTSDO-operated host edge-blocks our
  * egress by policy (an HTML 405 "Access Denied" page, any path, any header), so this server
  * speaks FHIR terminology operations instead: CodeSystem/$lookup reads a concept and
- * ValueSet/$expand runs ECL. Every path here was exercised live against tx.fhir.org.
+ * ValueSet/$expand runs ECL. Earlier observations do not establish current host
+ * support. New mapping paths are standard contracts awaiting live qualification.
  */
 
 import type { ApiCatalog } from "@bio-mcp/shared/codemode/catalog";
+import { discoveryWorkflow, mappingEndpoints, translationWorkflow } from "./mapping";
 
 const SCT = "http://snomed.info/sct";
 
 export const snowstormCatalog: ApiCatalog = {
 	name: "SNOMED CT (FHIR R4 terminology API)",
 	baseUrl: "https://tx.fhir.org/r4",
-	version: "SNOMED CT International 20250201 (FHIR R4)",
+	version: "FHIR R4; discover terminology editions at runtime",
 	auth: "none",
-	endpointCount: 9,
-	notes:
-		`- The code system is always \`system=${SCT}\`. Concept IDs are SNOMED CT identifiers (numeric strings), e.g. 73211009 = Diabetes mellitus, 404684003 = Clinical finding, 138875005 = SNOMED CT Concept (root)\n` +
-		"- READ A CONCEPT: `api.get('/CodeSystem/$lookup', { system, code, property: '*' })`. Returns a FHIR Parameters resource: `{ resourceType: 'Parameters', parameter: [{name,valueString|valueCode|valueBoolean}|{name:'designation',part:[...]}|{name:'property',part:[{name:'code',valueCode},{name:'value...'}]}] }`\n" +
-		"- `property: '*'` is what replaces Snowstorm's /browser/ concept format. For 73211009 it returns 4 designations plus properties: parent x2, child x16, module, inactive, effectiveTime, and the concept's ATTRIBUTE relationships keyed by attribute SCTID (363698007 'Finding site' x4). There is no separate 'browser' path — pass property='*'\n" +
-		"- SEARCH / ECL: `api.post('/ValueSet/$expand', body, { count, offset, filter })` where body is\n" +
-		`  \`{ resourceType: 'ValueSet', compose: { include: [{ system: '${SCT}', filter: [{ property: 'constraint', op: '=', value: '<ECL>' }] }] } }\`\n` +
-		"  Returns `{ resourceType: 'ValueSet', expansion: { total, offset, contains: [{system,code,display}] } }`\n" +
-		"- USE THE compose.include.filter FORM, NOT the implicit URL: `?url=" + SCT + "?fhir_vs=ecl/...` returns HTTP 422 'ValueSet not found' on tx.fhir.org (it does work on the Ontoserver alternate base)\n" +
-		"- ECL covers every hierarchy call the old Snowstorm paths made (verified totals for 73211009):\n" +
-		"  - `<! 73211009` = direct children (16) | `>! 73211009` = direct parents (2)\n" +
-		"  - `< 73211009` = descendants excl. self (123) | `> 73211009` = ancestors excl. self (8)\n" +
-		"  - `<< 73211009` = descendants incl. self | `>> 73211009` = ancestors incl. self\n" +
-		"  - `^ 723264001` = members of a reference set\n" +
-		"  - `<< 404684003 : 363698007 = 39057004` = attribute refinement — clinical findings with Finding site = Pulmonary valve structure (101). This is what replaces Snowstorm's /MAIN/relationships search: it answers 'which concepts have relationship TYPE to TARGET', which is the query use of a relationship row\n" +
-		"- TEXT SEARCH: add `filter` as a QUERY param to $expand; it combines with the ECL. `filter=type 2` over `< 73211009` gives 18 hits, first 44054006 Type 2 diabetes mellitus. For an unscoped text search use ECL `<< 138875005` (the SNOMED root) with a filter\n" +
-		"- IMPLICIT VALUE SETS (GET $expand with `url`): `" + SCT + "?fhir_vs=isa/{conceptId}` (transitive descendants incl. self — 124 for 73211009), `" + SCT + "?fhir_vs=refset/{refsetId}` (reference-set members), `" + SCT + "?fhir_vs` (the whole code system; use with `filter` — note this form returns no `expansion.total`)\n" +
-		"- PAGINATION: `count` and `offset` are query params on $expand. compose-based expansions return `expansion.total`; read it before assuming you have everything\n" +
-		"- EDITIONS: pass `version` (a full edition URI) to $lookup / $validate-code / $subsumes, or `compose.include.version` to $expand. `system-version` is NOT supported on this build — it returns HTTP 500 'Unable to understand default system version'. GET /CodeSystem?url=" + SCT + "&_summary=true lists what the server holds: International 900000000000207008 (20250201 default, 20240201), US 731000124108 (20250901, 20240301, 20230301), UK 83821000000107 (20230412), NL 11000146104 (20240930), CH 2011000195101 (20230607), DK 554471000005108 (20260331), IPS 827022005 (20241216), and an experimental AT xsct edition\n" +
-		"- Descriptions still exist, but only as `designation` entries inside a $lookup result (language + use.display, e.g. 'Fully specified name' / 'Preferred'). Semantic tags remain visible inside the FSN text, e.g. 'Diabetes mellitus (disorder)'\n" +
-		"- NOT AVAILABLE on this API — do not attempt these, they were Snowstorm-only (verified against both tx.fhir.org and the Ontoserver alternate):\n" +
-		"  - Description-level search (Snowstorm's description-search paths): FHIR returns concept rows, so descriptionId, per-language acceptability maps, and description-level paging are gone. Search concepts with $expand + `filter` instead\n" +
-		"  - Reverse reference-set membership ('which refsets contain concept X'): no FHIR analogue. You can only expand a KNOWN refset and look for the concept in it\n" +
-		"  - SNOMED to ICD-10 mapping: ConceptMap/$translate with `?fhir_cm=447562003` returns HTTP 404 on both servers. The complex-map refset's additionalFields (mapTarget/mapAdvice/mapPriority) are not exposed anywhere in this API. Do not claim an ICD-10 mapping from this server\n" +
-		"  - Raw relationship rows (relationshipId, relationshipGroup, characteristicType) and Snowstorm branch/task paths\n" +
-		"- Errors are FHIR OperationOutcome, not a plain body: an unknown concept gives HTTP 404 `{resourceType:'OperationOutcome',issue:[{severity:'error',code:'not-found',...}]}`\n" +
-		"- Headers are handled by the server: Accept: application/fhir+json on GET (no Content-Type), Content-Type: application/fhir+json on POST\n" +
-		"- LICENCE CAVEAT: these servers answer anonymous queries, but SNOMED CT content is licence-encumbered. Ontoserver's own payload states 'Implementer use of SNOMED CT is not covered by this agreement'. A SNOMED CT Affiliate Licence (free in member territories, https://mlds.ihtsdotools.org) is the correct instrument before re-serving this content to third parties\n" +
-		"- The base URL is operator-settable via the SNOMED_TX_BASE worker var (default https://tx.fhir.org/r4; alternate https://r4.ontoserver.csiro.au/fhir, which serves AU-preferred display terms). Call GET /metadata if you need to confirm which server answered\n" +
-		"- Neither base is SLA-backed: tx.fhir.org is HL7's community server and r4.ontoserver.csiro.au calls itself a Sandbox. Expect occasional outages",
+	endpointCount: 14,
+	notes: [
+		"- Host capabilities, editions and maps are mutable. Read /metadata, /metadata?mode=terminology and /CodeSystem. Software versions and retrieval-time releaseDate values are not SNOMED content releases.",
+		"- For SNOMED operations use system=http://snomed.info/sct. Preserve numeric concept IDs as strings. Use a version returned by this host and check the returned version; display terms vary by edition and version.",
+		"- Read concepts with CodeSystem/$lookup and property=*. Preserve all native Parameters, repeated property/part/designation entries and Coding fields. FHIR does not expose every Snowstorm description/relationship/branch field.",
+		"- For ECL POST ValueSet/$expand with a ValueSet compose.include containing system, optional version and filter [{property: constraint, op: =, value: ECL}]. Send count, offset and text filter as query parameters. Use bounded pages; retain expansion totals, timestamps, parameters and errors. Live pages are not an atomic snapshot.",
+		"- ECL operators include <! direct children, >! direct parents, < descendants, > ancestors, << descendants including self, >> ancestors including self and ^ reference-set members. Counts are edition-specific; no fixed total is promised.",
+		"- The default tx.fhir.org historically rejected implicit fhir_vs=ecl URLs; compose filters work in current native probes. Implicit isa/refset support and search behavior remain host-specific.",
+		"- ConceptMap search/read and GET/POST translation are qualified for sampled loaded maps on both candidate hosts. This does not establish SNOMED-to-ICD-10 or all-map coverage. Select map URL, business version and source/target context explicitly.",
+		"- The conceptMapVersion argument is NOT sufficient proof of a pin: tx.fhir.org returned map 101|4.0.1 for a nonexistent requested version; Ontoserver returned a native 404 for its nonexistent map version. Inspect every match.source/originMap canonical; unversioned evidence cannot confirm a map version. Retain all match equivalences, product/dependency parts, comments, result and message.",
+		"- Replay Bundle link.url with relation=next via GET /__page {url: link.url}. It preserves opaque cursors within the configured service. One page or total does not prove a stable complete inventory.",
+		"- Large native FHIR data stages into fhir_nodes: pointer/parent_pointer are JSON Pointers, member and ordinal preserve occurrences, kind distinguishes null/object/array/scalars, value_json preserves typed scalar values and value_text preserves strings. Root containers and empty arrays/objects remain explicit. Reconstruct by parent_pointer and ordinal; do not merge repeated Parameters or ConceptMap elements. payloads retains the complete canonical response.",
+		"- HTTP failures preserve bounded native OperationOutcome evidence. result=false is a native no-match/validation answer, distinct from an HTTP error. Check staged handles and __api_error before reading native fields in recipes.",
+		"- Both candidate hosts are public community/sandbox services without an assumed SLA. Preserve native copyright/licence metadata; anonymous access does not establish redistribution rights. SNOMED_TX_BASE selects the actual host for requests and citations.",
+	].join("\n"),
 	endpoints: [
+		...mappingEndpoints,
 		// === Concept ===
 		{
 			method: "GET",
@@ -84,7 +72,7 @@ export const snowstormCatalog: ApiCatalog = {
 					type: "string",
 					required: false,
 					description:
-						"Full SNOMED edition/version URI to read against, e.g. http://snomed.info/sct/731000124108/version/20250901 (US). Defaults to International 20250201. NOTE: the `system-version` parameter returns HTTP 500 on this server — `version` is the working name.",
+						"Full SNOMED edition/version URI returned by this host's /CodeSystem discovery. If omitted, the host chooses its current default; preserve the returned version.",
 				},
 			],
 			responseShape:
@@ -337,6 +325,8 @@ export const snowstormCatalog: ApiCatalog = {
 				"List the SNOMED CT editions and versions this terminology server holds. Use the returned version URIs with the `version` parameter on $lookup / $validate-code / $subsumes.",
 			category: "edition",
 			queryParams: [
+				{ name: "version", type: "string", required: false, description: "Filter to a specific CodeSystem business version" },
+				{ name: "_count", type: "number", required: false, description: "Page size; preserve and inspect Bundle links" },
 				{
 					name: "url",
 					type: "string",
@@ -362,9 +352,10 @@ export const snowstormCatalog: ApiCatalog = {
 			method: "GET",
 			path: "/metadata",
 			summary:
-				"Server CapabilityStatement — FHIR version, software name/version, and which terminology operations are supported. Use it to confirm which server SNOMED_TX_BASE is actually pointing at.",
+				"Server CapabilityStatement, or TerminologyCapabilities with mode=terminology. Discover configured-host operations and edition support; declarations do not prove a particular map is loaded.",
 			category: "edition",
 			queryParams: [
+				{ name: "mode", type: "string", required: false, description: "Use terminology for TerminologyCapabilities; omit for CapabilityStatement", enum: ["full", "normative", "terminology"] },
 				{
 					name: "_summary",
 					type: "string",
@@ -381,14 +372,17 @@ export const snowstormCatalog: ApiCatalog = {
 		},
 	],
 	workflows: [
+		discoveryWorkflow,
+		translationWorkflow,
 		{
 			title: "Concept card: display, FSN, parents and children",
 			description:
-				"One $lookup with property='*' gives everything the old /browser/MAIN/concepts/{id} path did. Parses the FHIR Parameters part-pairs into a flat object.",
+				"Returns a native FHIR lookup plus a convenience view of its designations and property parts. FHIR does not expose every old Snowstorm browser field.",
 			keywords: ["concept", "lookup", "browser", "fsn", "parents", "children", "detail"],
 			code: [
 				"const SCT = 'http://snomed.info/sct';",
 				"const r = await api.get('/CodeSystem/$lookup', { system: SCT, code: '73211009', property: '*' });",
+				"if (r.__staged || r.__api_error) return r;",
 				"const params = r.parameter || [];",
 				"const scalar = n => (params.find(p => p.name === n) || {}).valueString;",
 				"const propVal = p => { const v = (p.part || []).find(x => x.name !== 'code'); return v && (v.valueString ?? v.valueCode ?? v.valueBoolean ?? v.valueInteger); };",
@@ -403,13 +397,13 @@ export const snowstormCatalog: ApiCatalog = {
 				"  use: (((d.part || []).find(x => x.name === 'use') || {}).valueCoding || {}).display,",
 				"  value: ((d.part || []).find(x => x.name === 'value') || {}).valueString,",
 				"}));",
-				"return { code: '73211009', display: scalar('display'), edition: scalar('version'), designations, parents: props.parent, children: props.child, attributes: props };",
+				"return { native: r, code: '73211009', display: scalar('display'), edition: scalar('version'), designations, parents: props.parent, children: props.child, attributes: props };",
 			].join("\n"),
 		},
 		{
 			title: "ECL search with paging (children, descendants, refinement)",
 			description:
-				"Pages a ValueSet/$expand until expansion.total is exhausted. Works for any ECL, including attribute refinement.",
+				"Reads bounded ECL pages and retains each native expansion. Stops on staged/error responses, missing totals or count limits without claiming exhaustive or atomic coverage.",
 			keywords: ["ecl", "search", "expand", "paging", "descendants", "children", "refinement"],
 			code: [
 				"const SCT = 'http://snomed.info/sct';",
@@ -417,19 +411,21 @@ export const snowstormCatalog: ApiCatalog = {
 				"async function eclAll(expression, opts = {}) {",
 				"  const pageSize = opts.count || 200;",
 				"  const max = opts.max || 1000;",
-				"  const rows = [];",
+				"  const rows = [], pages = [];",
 				"  let offset = 0, total = null;",
 				"  while (rows.length < max) {",
-				"    const q = { count: pageSize, offset };",
+				"    const q = { count: Math.min(pageSize, max - rows.length), offset };",
 				"    if (opts.filter) q.filter = opts.filter;",
 				"    const r = await api.post('/ValueSet/$expand', eclBody(expression), q);",
+				"    pages.push(r);",
+				"    if (r.__staged || r.__api_error) return { total, rows, pages, complete: false, next_offset: offset, reason: 'Inspect the native error or staged page before continuing.' };",
 				"    const page = (r.expansion && r.expansion.contains) || [];",
 				"    if (total === null) total = r.expansion && r.expansion.total;",
 				"    rows.push(...page);",
 				"    offset += page.length;",
 				"    if (!page.length || (typeof total === 'number' && offset >= total)) break;",
 				"  }",
-				"  return { total, complete: typeof total === 'number' && rows.length >= total, rows };",
+				"  return { total, rows, pages, complete: false, observed_total_reached: typeof total === 'number' && rows.length >= total, next_offset: offset, coverage: 'Live pages are not an atomic snapshot. Check expansion versions and totals on every page.' };",
 				"}",
 				"// direct children of Diabetes mellitus",
 				"return await eclAll('<! 73211009');",
@@ -438,7 +434,7 @@ export const snowstormCatalog: ApiCatalog = {
 		{
 			title: "Cross-edition check: does a concept differ between editions?",
 			description:
-				"Reads the same concept in two editions with the `version` parameter. Use the edition URIs from GET /CodeSystem. Note `system-version` returns HTTP 500 on tx.fhir.org — `version` is the working parameter.",
+				"Reads a concept in three historically observed tx.fhir.org editions. Discover current CodeSystem versions before adapting the example; verify each returned version and retain errors/handles.",
 			keywords: ["edition", "version", "us", "uk", "international", "compare"],
 			code: [
 				"const SCT = 'http://snomed.info/sct';",
@@ -451,7 +447,7 @@ export const snowstormCatalog: ApiCatalog = {
 				"for (const [name, version] of Object.entries(editions)) {",
 				"  const r = await api.get('/CodeSystem/$lookup', { system: SCT, code: '73211009', version });",
 				"  const p = n => (( r.parameter || []).find(x => x.name === n) || {}).valueString;",
-				"  out[name] = { display: p('display'), version: p('version') };",
+				"  out[name] = { native: r, requested_version: version, display: p('display'), version: p('version'), version_matches: p('version') === version };",
 				"}",
 				"return out;",
 			].join("\n"),

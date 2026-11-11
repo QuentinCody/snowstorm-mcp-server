@@ -4,43 +4,39 @@
  */
 
 import type { ApiFetchFn } from "@bio-mcp/shared/codemode/catalog";
-import { snowstormFetch, snowstormPost } from "./http";
+import { getSnomedTxBase, snowstormFetch, snowstormPost } from "./http";
+import { nativeError } from "./native-error";
+import { continuationPath } from "./continuation";
 
 /**
  * Create an ApiFetchFn that routes through snowstormFetch/snowstormPost.
  * No auth needed — the FHIR terminology base is keyless.
  */
-export function createSnowstormApiFetch(): ApiFetchFn {
+export function createSnowstormApiFetch(baseUrl = getSnomedTxBase()): ApiFetchFn {
 	return async (request) => {
 		let response: Response;
+		if (request.method !== "GET" && request.method !== "POST") throw new Error("Only documented GET and read-only POST operations are supported");
+		if (request.method === "GET" && request.body !== undefined) throw new Error("GET requests must not carry a body");
+		const path = request.path === "/__page" ? continuationPath(request.params?.url, baseUrl) : request.path;
+		if (request.path === "/__page" && request.method !== "GET") throw new Error("Bundle continuation supports GET only");
+		const params = request.path === "/__page" ? undefined : request.params;
 
 		if (request.method === "POST") {
 			// ValueSet/$expand takes the ECL in the body and count/offset/filter in
 			// the query string, so a POST must carry BOTH. Dropping request.params
 			// here silently unpaginates and unfilters every ECL search.
 			response = await snowstormPost(
-				request.path,
+				path,
 				request.body as Record<string, unknown>,
 				request.params,
+				{ baseUrl },
 			);
 		} else {
-			response = await snowstormFetch(request.path, request.params);
+			response = await snowstormFetch(path, params, { baseUrl });
 		}
 
 		if (!response.ok) {
-			let errorBody: string;
-			try {
-				errorBody = await response.text();
-			} catch {
-				errorBody = response.statusText;
-			}
-			const error = new Error(`HTTP ${response.status}: ${errorBody.slice(0, 200)}`) as Error & {
-				status: number;
-				data: unknown;
-			};
-			error.status = response.status;
-			error.data = errorBody;
-			throw error;
+			throw await nativeError(response, response.url || `${baseUrl}${path}`);
 		}
 
 		const contentType = response.headers.get("content-type") || "";

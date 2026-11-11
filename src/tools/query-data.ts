@@ -1,20 +1,22 @@
 import type { McpServer } from "@bio-mcp/shared/mcp";
 import { z } from "zod";
+import { snowstormResponse } from "../lib/tool-result";
 import { createQueryDataHandler } from "@bio-mcp/shared/staging/utils";
 
 interface QueryEnv {
     SNOWSTORM_DATA_DO?: unknown;
+    SNOMED_TX_BASE?: string;
 }
 
 export function registerQueryData(server: McpServer, env?: QueryEnv): void {
     const handler = createQueryDataHandler("SNOWSTORM_DATA_DO", "snowstorm");
 
-    server.registerTool(
-        "snowstorm_query_data",
+    for (const toolName of ["snowstorm_query_data", "mcp_snowstorm_query_data"]) server.registerTool(
+        toolName,
         {
             title: "Query Staged Snowstorm Data",
             description:
-                "Query staged SNOMED CT data using SQL. Use this when responses are too large and have been staged with a data_access_id.",
+                "Query staged Snowstorm data using SQL. Use this when responses are too large and have been staged with a data_access_id.",
             inputSchema: {
                 data_access_id: z
                     .string()
@@ -29,7 +31,6 @@ export function registerQueryData(server: McpServer, env?: QueryEnv): void {
                     .int()
                     .positive()
                     .max(10000)
-                    .default(100)
                     .optional()
                     .describe("Maximum number of rows to return (default: 100)"),
             },
@@ -37,10 +38,10 @@ export function registerQueryData(server: McpServer, env?: QueryEnv): void {
         async (args, extra) => {
             const runtimeEnv =
                 env || (extra as { env?: QueryEnv })?.env || {};
-            return handler(
+            return snowstormResponse(() => handler(
                 args as Record<string, unknown>,
                 runtimeEnv as Record<string, unknown>,
-            );
+            ), runtimeEnv, toolName, extra, args);
         },
     );
 }

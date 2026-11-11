@@ -7,9 +7,13 @@
 
 import { RestStagingDO } from "@bio-mcp/shared/staging/rest-staging-do";
 import type { SchemaHints } from "@bio-mcp/shared/staging/schema-inference";
+import { fhirResource, fhirSchemaHints, fhirTables } from "./lib/fhir-staging";
 
 export class SnowstormDataDO extends RestStagingDO {
+	protected getTabularData(data: unknown): unknown { return fhirTables(data) ?? data; }
+
 	protected getSchemaHints(data: unknown): SchemaHints | undefined {
+		if (fhirResource(data)) return fhirSchemaHints;
 		if (!data || typeof data !== "object") return undefined;
 
 		const obj = data as Record<string, unknown>;

@@ -11,11 +11,13 @@ import { createSearchTool } from "@bio-mcp/shared/codemode/search-tool";
 import { createExecuteTool } from "@bio-mcp/shared/codemode/execute-tool";
 import { snowstormCatalog } from "../spec/catalog";
 import { createSnowstormApiFetch } from "../lib/api-adapter";
-import { getSnomedTxBase } from "../lib/http";
+import { snowstormResponse, snowstormSource } from "../lib/tool-result";
+import { DEFAULT_SNOMED_TX_BASE } from "../lib/http";
 
 interface CodeModeEnv {
 	SNOWSTORM_DATA_DO: DurableObjectNamespace;
 	CODE_MODE_LOADER: WorkerLoader;
+	SNOMED_TX_BASE?: string;
 }
 
 /**
@@ -25,34 +27,37 @@ export function registerCodeMode(
 	server: McpServer,
 	env: CodeModeEnv,
 ): void {
-	const apiFetch = createSnowstormApiFetch();
+	const baseUrl = (env.SNOMED_TX_BASE || DEFAULT_SNOMED_TX_BASE).replace(/\/$/, "");
+	const apiFetch = createSnowstormApiFetch(baseUrl);
+	const catalog = { ...snowstormCatalog, baseUrl };
+	const registrar = { tool: (...args: unknown[]) => {
+		const [name, ...rest] = args;
+		// SAFETY: shared factories supply SDK arguments; only the alias changes.
+		const register = server.tool.bind(server) as (...values: unknown[]) => void;
+		const handler = rest.pop() as (input: unknown, extra: unknown) => ReturnType<typeof snowstormResponse>;
+		const respond = (input: unknown, extra: unknown) => snowstormResponse(() => handler(input, extra), env, String(name), extra, input);
+		register(name, ...rest, respond); register(`mcp_${String(name)}`, ...rest, respond);
+	} };
 
 	// Register the search tool (in-process, no isolate)
 	const searchTool = createSearchTool({
 		prefix: "snowstorm",
-		catalog: snowstormCatalog,
+		catalog,
 	});
-	searchTool.register(server as unknown as { tool: (...args: unknown[]) => void });
+	searchTool.register(registrar);
 
 	// Register the execute tool (V8 isolate via DynamicWorkerExecutor)
 	const executeTool = createExecuteTool({
 		prefix: "snowstorm",
-		// Verifiable provenance: snowstorm_execute results carry a _meta.citation.
-		// The citation must name the endpoint that actually served the bytes, not
-		// the terminology's publisher — these results come from HL7's reference
-		// terminology server, not from SNOMED International (which blocks us).
-		source: {
-			id: "snowstorm",
-			name: "SNOMED CT via HL7 FHIR terminology server",
-			url: getSnomedTxBase(),
-			license:
-				"SNOMED CT is copyright (c) 2002+ International Health Terminology Standards Development Organisation (IHTSDO), distributed by agreement between IHTSDO and HL7. Implementer use of SNOMED CT is not covered by that agreement — a SNOMED CT Affiliate Licence (https://mlds.ihtsdotools.org) is required to redistribute this content.",
-			version: "SNOMED CT International 20250201 (server default; override per-call with the `version` parameter)",
-		},
-		catalog: snowstormCatalog,
+		source: snowstormSource(env),
+		catalog,
 		apiFetch,
+		preserveApiErrors: true,
 		doNamespace: env.SNOWSTORM_DATA_DO,
 		loader: env.CODE_MODE_LOADER,
+		maxInlineBytes: 30 * 1024,
+		stagingThreshold: 30 * 1024,
+		timeout: 60000,
 	});
-	executeTool.register(server as unknown as { tool: (...args: unknown[]) => void });
+	executeTool.register(registrar);
 }
