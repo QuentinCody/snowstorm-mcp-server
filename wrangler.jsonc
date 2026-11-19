@@ -1,5 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
+	"services": [{ "binding": "FEEDBACK_INBOX", "service": "mcp-client-bio", "entrypoint": "FeedbackInbox" }],
 	"name": "snowstorm-mcp-server",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-03-10",
@@ -47,6 +48,7 @@
 			}]
 	},
 	"vars": {
+	  "MCP_FEEDBACK_SOURCE": "snowstorm",
 		// SNOMED CT FHIR terminology base. tx.fhir.org is HL7's keyless reference
 		// server (SNOMED CT International). browser.ihtsdotools.org is NOT usable:
 		// SNOMED International edge-blocks our egress. Alternate, AU edition:
